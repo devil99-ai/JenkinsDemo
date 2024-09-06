@@ -1,29 +1,48 @@
-pipeline { 
-    agent any
-    
-    tools {
-        maven 'maven3'
-        jdk 'jdk17'
+pipeline {
+  agent any
+  environment {
+    AWS_DEFAULT_REGION = 'ap-south-1'
+    ECR_REPO_NAME = '203123579158.dkr.ecr.ap-south-1.amazonaws.com/angular-docker'
+    IMAGE_TAG = "203123579158.dkr.ecr.ap-south-1.amazonaws.com/angular-docker:${env.BUILD_ID}"
+  }
+  stages {
+    stage('Checkout') {
+      steps {
+        git branch: 'main', url: 'https://github.com/devil99-ai/JenkinsDemo.git'
+      }
     }
-
-    stages {
-        
-        stage('Compile') {
-            steps {
-            sh  "mvn compile"
-            }
+    stage('Build Docker Image') {
+      steps {
+        script {
+          dockerImage = docker.build("${env.ECR_REPO_NAME}:${env.BUILD_ID}")
         }
-        
-        stage('Test') {
-            steps {
-                sh "mvn test"
-            }
-        }
-        
-        stage('Package') {
-            steps {
-                sh "mvn package"
-            }
-        }
+      }
     }
+    stage('Scan with Trivy') {
+      steps {
+        script {
+          sh 'trivy image --exit-code 1 --severity HIGH,CRITICAL ${dockerImage.id}'
+        }
+      }
+    }
+    stage('Push Docker Image') {
+      steps {
+        script {
+          docker.withRegistry("https://${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_DEFAULT_REGION}.amazonaws.com", 'ecr:aws-credentials') {
+            dockerImage.push()
+          }
+        }
+      }
+    }
+    stage('Deploy to EKS') {
+      steps {
+        script {
+          sh '''
+          aws eks --region $AWS_DEFAULT_REGION update-kubeconfig --name $CLUSTER_NAME
+          kubectl apply -f k8s/deployment.yaml
+          '''
+        }
+      }
+    }
+  }
 }
